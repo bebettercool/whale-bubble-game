@@ -6,28 +6,33 @@
 <style>
   html,body{margin:0;height:100%;background:#0b1a2a;overflow:hidden;
     font-family:"Microsoft YaHei",system-ui,sans-serif;color:#dff1ff;
-    user-select:none;cursor:none;}
+    user-select:none;}
   #wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
   canvas{background:linear-gradient(#0e2b45,#0b1a2a 70%,#07131f);border-radius:12px;
-    box-shadow:0 0 40px #1e6fa855;max-width:100%;max-height:100%}
+    box-shadow:0 0 40px #1e6fa855;max-width:100%;max-height:100%;cursor:default}
   #hint{position:absolute;bottom:10px;font-size:13px;opacity:.55}
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="c" width="720" height="520"></canvas>
-  <div id="hint">鼠标 或 ← → 挪动,空格暂停</div>
+  <div id="hint">鼠标 或 ← → 挪动 · 空格 / P 暂停 · Enter 重开</div>
 </div>
 <script>
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height;
 
+const ROUND_TIME = 45;
+
+// phase: 'ready' | 'playing' | 'paused' | 'over'
 const state = {
   x: W/2, y: H - 62, tx: W/2, t: 0,
-  score: 0, lives: 3, time: 45,
-  items: [], pops: [], fish: [], bubbles: [],
-  running: true, over: false, best: +(localStorage.getItem('whaleBest')||0)
+  score: 0, lives: 3, time: ROUND_TIME,
+  items: [], pops: [],
+  bubbles: [],
+  phase: 'ready',
+  best: +(localStorage.getItem('whaleBest') || 0)
 };
 
 // 背景小气泡
@@ -36,7 +41,16 @@ for (let i=0;i<40;i++) state.bubbles.push({
   r: 1+Math.random()*3, s: .2+Math.random()*.6
 });
 
-// 水母、小鱼干、金币
+// 按钮:坐标 + 尺寸,和 canvas 一起画
+const buttons = {
+  start:  {x: W/2-90, y: H/2-4,  w: 180, h: 52, label: '开始游戏'},
+  again:  {x: W/2-90, y: H/2+22, w: 180, h: 52, label: '再来一局'},
+  resume: {x: W/2-80, y: H/2+16, w: 160, h: 48, label: '继续'},
+  pause:  {x: W-104, y: 16, w: 88, h: 34, label: '暂停'}
+};
+
+let hot = null; // 鼠标悬停的按钮
+
 const TYPES = {
   coin:  {r:14, score:10, good:true,  color:'#ffd36e'},
   fish:  {r:13, score:25, good:true,  color:'#8ee6ff'},
@@ -44,19 +58,78 @@ const TYPES = {
 };
 
 let keys = {};
+
+function startRound(){
+  state.score = 0; state.lives = 3; state.time = ROUND_TIME;
+  state.items = []; state.pops = [];
+  state.x = state.tx = W/2;
+  state.t = 0; spawnTimer = 0;
+  state.phase = 'playing';
+}
+function togglePause(){
+  if (state.phase === 'playing') state.phase = 'paused';
+  else if (state.phase === 'paused') state.phase = 'playing';
+}
+
 addEventListener('keydown', e=>{
   keys[e.key] = true;
-  if (e.key === ' ') { if(!state.over) state.running = !state.running; }
-  if (e.key === 'Enter' && state.over) reset();
+  if (e.key === ' ' || e.key === 'p' || e.key === 'P'){
+    if (state.phase === 'playing' || state.phase === 'paused') togglePause();
+    else if (state.phase === 'ready') startRound();
+    e.preventDefault();
+  }
+  if (e.key === 'Enter'){
+    if (state.phase === 'ready' || state.phase === 'over') startRound();
+  }
   if (['ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
 });
 addEventListener('keyup', e=> keys[e.key] = false);
 
-cv.addEventListener('mousemove', e=>{
+function canvasPos(e){
   const r = cv.getBoundingClientRect();
-  state.tx = (e.clientX - r.left) * (W / r.width);
+  return {x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height)};
+}
+function hitButton(p){
+  for (const k in buttons){
+    const b = buttons[k];
+    if (visibleButton(k) && p.x >= b.x && p.x <= b.x+b.w && p.y >= b.y && p.y <= b.y+b.h) return k;
+  }
+  return null;
+}
+function visibleButton(k){
+  if (k === 'start')  return state.phase === 'ready';
+  if (k === 'again')  return state.phase === 'over';
+  if (k === 'resume') return state.phase === 'paused';
+  if (k === 'pause')  return state.phase === 'playing' || state.phase === 'paused';
+  return false;
+}
+
+cv.addEventListener('mousemove', e=>{
+  const p = canvasPos(e);
+  hot = hitButton(p);
+  cv.style.cursor = hot ? 'pointer' : 'default';
+  if (state.phase === 'playing') state.tx = p.x;
 });
+cv.addEventListener('mousedown', e=>{
+  if (e.button !== 0) return;
+  const k = hitButton(canvasPos(e));
+  if (!k) return;
+  if (k === 'start' || k === 'again') startRound();
+  else if (k === 'resume') state.phase = 'playing';
+  else if (k === 'pause') togglePause();
+  e.preventDefault();
+});
+cv.addEventListener('touchstart', e=>{
+  const r = cv.getBoundingClientRect();
+  const p = {x: (e.touches[0].clientX - r.left) * (W / r.width), y: (e.touches[0].clientY - r.top) * (H / r.height)};
+  const k = hitButton(p);
+  if (k === 'start' || k === 'again' || k === 'resume') { startRound(); }
+  else if (k === 'pause') { togglePause(); }
+  else if (state.phase === 'playing') state.tx = p.x;
+  e.preventDefault();
+}, {passive:false});
 cv.addEventListener('touchmove', e=>{
+  if (state.phase !== 'playing') return;
   const r = cv.getBoundingClientRect();
   state.tx = (e.touches[0].clientX - r.left) * (W / r.width);
   e.preventDefault();
@@ -79,16 +152,65 @@ function pop(x, y, text, color){
   state.pops.push({x, y, text, color, life:1});
 }
 
-function reset(){
-  state.score = 0; state.lives = 3; state.time = 45;
-  state.items = []; state.pops = []; state.over = false;
-  state.running = true; state.t = 0;
+function gameOver(){
+  state.phase = 'over';
+  if (state.score > state.best){
+    state.best = state.score;
+    localStorage.setItem('whaleBest', state.best);
+  }
+}
+
+let spawnTimer = 0;
+
+function step(dt){
+  if (state.phase !== 'playing') return;
+
+  state.t += dt;
+  state.time -= dt;
+  if (state.time <= 0){ state.time = 0; gameOver(); return; }
+
+  if (keys['ArrowLeft']) state.tx -= 420*dt;
+  if (keys['ArrowRight']) state.tx += 420*dt;
+  state.tx = Math.max(40, Math.min(W-40, state.tx));
+  state.x += (state.tx - state.x) * Math.min(1, 12*dt);
+
+  spawnTimer -= dt;
+  if (spawnTimer <= 0){
+    spawnTimer = Math.max(0.22, 0.65 - state.score*0.002);
+    spawn();
+  }
+
+  for (let i=state.items.length-1;i>=0;i--){
+    const it = state.items[i];
+    it.y += it.vy*dt;
+    it.spin += dt*3;
+    const dx = it.x - state.x, dy = it.y - (state.y - 8);
+    if (Math.hypot(dx, dy) < it.r + 26){
+      const T = TYPES[it.type];
+      if (T.good){
+        state.score += T.score;
+        pop(it.x, it.y, '+'+T.score, '#9ff5c8');
+      } else {
+        state.lives--;
+        pop(it.x, it.y, '哎呀!', '#ff9db0');
+        if (state.lives <= 0) gameOver();
+      }
+      state.items.splice(i,1);
+      continue;
+    }
+    if (it.y > H+40) state.items.splice(i,1);
+  }
+
+  for (let i=state.pops.length-1;i>=0;i--){
+    const p = state.pops[i];
+    p.life -= dt*1.4; p.y -= 40*dt;
+    if (p.life <= 0) state.pops.splice(i,1);
+  }
 }
 
 function drawWhale(x, y){
   ctx.save();
   ctx.translate(x, y);
-  // 尾巴
   ctx.fillStyle = '#2f7fc4';
   ctx.beginPath();
   ctx.moveTo(0, 6);
@@ -96,45 +218,26 @@ function drawWhale(x, y){
   ctx.quadraticCurveTo(-30, -8, -22, 4);
   ctx.quadraticCurveTo(-14, 14, 0, 16);
   ctx.fill();
-  // 身体
   const g = ctx.createLinearGradient(0,-26,0,20);
   g.addColorStop(0,'#7fd0ff'); g.addColorStop(1,'#2b6faa');
   ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 30, 24, 0, 0, Math.PI*2);
-  ctx.fill();
-  // 肚子
+  ctx.beginPath(); ctx.ellipse(0, 0, 30, 24, 0, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = 'rgba(240,250,255,.75)';
-  ctx.beginPath();
-  ctx.ellipse(2, 9, 21, 12, 0, 0, Math.PI*2);
-  ctx.fill();
-  // 鲸鳍
+  ctx.beginPath(); ctx.ellipse(2, 9, 21, 12, 0, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = '#5fb6ea';
-  ctx.beginPath();
-  ctx.ellipse(-8, 12, 11, 6, -0.5, 0, Math.PI*2);
-  ctx.fill();
-  // 头发
+  ctx.beginPath(); ctx.ellipse(-8, 12, 11, 6, -0.5, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = '#3b7fbf';
-  ctx.beginPath();
-  ctx.ellipse(-4, -18, 22, 12, -0.2, 0, Math.PI*2);
-  ctx.fill();
-  // 呆毛
+  ctx.beginPath(); ctx.ellipse(-4, -18, 22, 12, -0.2, 0, Math.PI*2); ctx.fill();
   ctx.strokeStyle = '#3b7fbf'; ctx.lineWidth = 3; ctx.lineCap='round';
-  ctx.beginPath();
-  ctx.moveTo(-2, -28);
-  ctx.quadraticCurveTo(6, -40, 12, -30);
-  ctx.stroke();
-  // 眼睛
+  ctx.beginPath(); ctx.moveTo(-2, -28); ctx.quadraticCurveTo(6, -40, 12, -30); ctx.stroke();
   ctx.fillStyle = '#12314a';
   ctx.beginPath(); ctx.arc(8, -4, 3.4, 0, 7); ctx.fill();
   ctx.beginPath(); ctx.arc(-4, -4, 3.4, 0, 7); ctx.fill();
   ctx.fillStyle = '#fff';
   ctx.beginPath(); ctx.arc(9.2, -5.2, 1.1, 0, 7); ctx.fill();
   ctx.beginPath(); ctx.arc(-2.8, -5.2, 1.1, 0, 7); ctx.fill();
-  // 嘴
   ctx.strokeStyle = '#12314a'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(2, 2, 5, 0.2, Math.PI-0.2); ctx.stroke();
-  // 腮红
   ctx.fillStyle = 'rgba(255,150,170,.45)';
   ctx.beginPath(); ctx.arc(-10, 3, 4, 0, 7); ctx.fill();
   ctx.beginPath(); ctx.arc(14, 3, 4, 0, 7); ctx.fill();
@@ -176,79 +279,38 @@ function drawItem(it){
   }
 }
 
-let last = performance.now();
-let spawnTimer = 0;
-
-function step(dt){
-  state.t += dt;
-  if (!state.running) return;
-
-  // 计时
-  state.time -= dt;
-  if (state.time <= 0){ state.time = 0; state.running = false; gameOver(); }
-
-  // 移动
-  if (keys['ArrowLeft']) state.tx -= 420*dt;
-  if (keys['ArrowRight']) state.tx += 420*dt;
-  state.tx = Math.max(40, Math.min(W-40, state.tx));
-  state.x += (state.tx - state.x) * Math.min(1, 12*dt);
-
-  // 生成
-  spawnTimer -= dt;
-  if (spawnTimer <= 0){
-    spawnTimer = Math.max(0.22, 0.65 - state.score*0.002);
-    spawn();
-  }
-
-  // 下落 + 吃
-  for (let i=state.items.length-1;i>=0;i--){
-    const it = state.items[i];
-    it.y += it.vy*dt;
-    it.spin += dt*3;
-    const dx = it.x - state.x, dy = it.y - (state.y - 8);
-    if (Math.hypot(dx, dy) < it.r + 26){
-      const T = TYPES[it.type];
-      if (T.good){
-        state.score += T.score;
-        pop(it.x, it.y, '+'+T.score, '#9ff5c8');
-      } else {
-        state.lives--;
-        pop(it.x, it.y, '哎呀!', '#ff9db0');
-        if (state.lives <= 0){ state.running = false; gameOver(); }
-      }
-      state.items.splice(i,1);
-      continue;
-    }
-    if (it.y > H+40) state.items.splice(i,1);
-  }
-
-  for (let i=state.pops.length-1;i>=0;i--){
-    const p = state.pops[i];
-    p.life -= dt*1.4; p.y -= 40*dt;
-    if (p.life <= 0) state.pops.splice(i,1);
-  }
-}
-
-function gameOver(){
-  state.over = true;
-  if (state.score > state.best){
-    state.best = state.score;
-    localStorage.setItem('whaleBest', state.best);
-  }
+function drawButton(b){
+  const isHot = hot && buttons[hot] === b;
+  ctx.fillStyle = isHot ? '#3f8fd0' : '#2a6aa0';
+  ctx.strokeStyle = 'rgba(200,235,255,.75)'; ctx.lineWidth = 2;
+  const r = 10;
+  ctx.beginPath();
+  ctx.moveTo(b.x+r, b.y);
+  ctx.arcTo(b.x+b.w, b.y, b.x+b.w, b.y+b.h, r);
+  ctx.arcTo(b.x+b.w, b.y+b.h, b.x, b.y+b.h, r);
+  ctx.arcTo(b.x, b.y+b.h, b.x, b.y, r);
+  ctx.arcTo(b.x, b.y, b.x+b.w, b.y, r);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#eaf6ff';
+  ctx.font = 'bold 19px "Microsoft YaHei",sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(b.label, b.x + b.w/2, b.y + b.h/2 + 1);
+  ctx.textBaseline = 'alphabetic';
 }
 
 function draw(){
   ctx.clearRect(0,0,W,H);
-  // 背景气泡
+
   ctx.fillStyle = 'rgba(160,220,255,.12)';
   for (const b of state.bubbles){
-    if (state.running){
+    if (state.phase === 'playing'){
       b.y -= b.s*20/60;
       if (b.y < -10){ b.y = H+10; b.x = Math.random()*W; }
     }
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
   }
-  // 海草
+
   ctx.strokeStyle = 'rgba(60,180,150,.35)'; ctx.lineWidth = 5;
   for (let i=0;i<7;i++){
     const bx = 50 + i*100;
@@ -279,32 +341,56 @@ function draw(){
   ctx.fillStyle = 'rgba(223,241,255,.7)';
   ctx.fillText('最好 ' + state.best, 18, 56);
   ctx.textAlign = 'right';
-  ctx.fillText('时间 ' + Math.ceil(state.time) + 's', W-18, 32);
-  ctx.fillText('♥'.repeat(Math.max(0,state.lives)), W-18, 56);
+  ctx.fillText('时间 ' + Math.ceil(state.time) + 's', W-118, 32);
+  ctx.fillText('♥'.repeat(Math.max(0,state.lives)), W-118, 56);
 
-  if (!state.running && !state.over){
+  // 开始页
+  if (state.phase === 'ready'){
     ctx.fillStyle = 'rgba(6,18,30,.55)';
     ctx.fillRect(0,0,W,H);
     ctx.fillStyle = '#dff1ff'; ctx.textAlign='center';
-    ctx.font = 'bold 30px "Microsoft YaHei",sans-serif';
-    ctx.fillText('暂停中', W/2, H/2);
-    ctx.font = '15px "Microsoft YaHei",sans-serif';
-    ctx.fillText('空格继续', W/2, H/2+34);
+    ctx.font = 'bold 34px "Microsoft YaHei",sans-serif';
+    ctx.fillText('大肥鱼接泡泡', W/2, H/2-92);
+    ctx.font = '16px "Microsoft YaHei",sans-serif';
+    ctx.fillStyle = 'rgba(223,241,255,.8)';
+    ctx.fillText('接金币 +10 · 接小鱼干 +25 · 躲开水母', W/2, H/2-54);
+    ctx.fillText('一局 ' + ROUND_TIME + ' 秒,掉光三颗心就结束', W/2, H/2-30);
+    drawButton(buttons.start);
   }
-  if (state.over){
+
+  // 暂停
+  if (state.phase === 'paused'){
+    ctx.fillStyle = 'rgba(6,18,30,.6)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#dff1ff'; ctx.textAlign='center';
+    ctx.font = 'bold 30px "Microsoft YaHei",sans-serif';
+    ctx.fillText('暂停中', W/2, H/2-24);
+    ctx.font = '15px "Microsoft YaHei",sans-serif';
+    ctx.fillStyle = 'rgba(223,241,255,.75)';
+    ctx.fillText('空格或 P 继续', W/2, H/2-2);
+    drawButton(buttons.resume);
+  }
+
+  // 结束
+  if (state.phase === 'over'){
     ctx.fillStyle = 'rgba(6,18,30,.68)';
     ctx.fillRect(0,0,W,H);
     ctx.fillStyle = '#dff1ff'; ctx.textAlign='center';
     ctx.font = 'bold 34px "Microsoft YaHei",sans-serif';
-    ctx.fillText('时间到啦', W/2, H/2-36);
+    ctx.fillText('时间到啦', W/2, H/2-70);
     ctx.font = 'bold 22px "Microsoft YaHei",sans-serif';
-    ctx.fillText('得分 ' + state.score + ' / 最好 ' + state.best, W/2, H/2+4);
+    ctx.fillText('得分 ' + state.score + ' / 最好 ' + state.best, W/2, H/2-30);
+    drawButton(buttons.again);
     ctx.font = '15px "Microsoft YaHei",sans-serif';
-    ctx.fillStyle = 'rgba(223,241,255,.75)';
-    ctx.fillText('按 Enter 再来一次,库...', W/2, H/2+44);
+    ctx.fillStyle = 'rgba(223,241,255,.7)';
+    ctx.fillText('也可以按 Enter 再来一次', W/2, H/2+96);
   }
+
+  // 暂停按钮最后画,免得被遮罩压暗
+  if (visibleButton('pause')) drawButton(buttons.pause);
 }
 
+let last = performance.now();
 function loop(now){
   const dt = Math.min(0.05, (now-last)/1000);
   last = now;
